@@ -54,7 +54,8 @@ namespace RabbitMqTest3
 
         public void ConfigureContainer(ContainerBuilder builder)
         {
-            
+            builder.RegisterAssemblyTypes(typeof(IIntegrationEventHandler<>).Assembly)
+                .AsClosedTypesOf(typeof(IIntegrationEventHandler<>));
         }
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
@@ -79,6 +80,7 @@ namespace RabbitMqTest3
             var eventBus = app.ApplicationServices.GetRequiredService<IEventBus>();
             eventBus.Subscribe<ProductCreatedIntegrationEvent, IIntegrationEventHandler<ProductCreatedIntegrationEvent>>();
             eventBus.Subscribe<ProductRemovedIntegrationEvent, IIntegrationEventHandler<ProductRemovedIntegrationEvent>>();
+            eventBus.StartConsuming();
         }
     }
 }

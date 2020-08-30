@@ -1,13 +1,14 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Autofac;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using RabbitMqTest3.IntegrationEvents.EventHandlers;
 using RabbitMqTest3.IntegrationEvents.EventTypes;
 using System;
 using System.Text;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
-using RabbitMQ.Client.Events;
 
 namespace RabbitMqTest3.EventBus
 {
@@ -15,19 +16,21 @@ namespace RabbitMqTest3.EventBus
     {
         private readonly IPersistentRabbitMqConnection _persistentRabbitMqConnection;
         private readonly IEventBusSubscriptionManager _eventBusSubscriptionManager;
-        private readonly ILogger<EventBusRabbitMq> _logger;
         private readonly RabbitMqConfig _rabbitMqConfig;
-        
+        private readonly ILifetimeScope _lifetimeScope;
+        private readonly ILogger<EventBusRabbitMq> _logger;
+
         private IModel _consumerChannel;
 
         private bool _exchangeDeclared;
         private bool _queueDeclared;
 
         public EventBusRabbitMq(IPersistentRabbitMqConnection persistentRabbitMqConnection, IEventBusSubscriptionManager eventBusSubscriptionManager,
-            IOptionsMonitor<RabbitMqConfig> rabbitMqConfig, ILogger<EventBusRabbitMq> logger)
+            IOptionsMonitor<RabbitMqConfig> rabbitMqConfig, ILifetimeScope lifetimeScope, ILogger<EventBusRabbitMq> logger)
         {
-            _persistentRabbitMqConnection = persistentRabbitMqConnection ?? throw new ArgumentNullException(nameof(_persistentRabbitMqConnection));
-            _eventBusSubscriptionManager = eventBusSubscriptionManager ?? throw new ArgumentNullException(nameof(_eventBusSubscriptionManager));
+            _persistentRabbitMqConnection = persistentRabbitMqConnection ?? throw new ArgumentNullException(nameof(persistentRabbitMqConnection));
+            _eventBusSubscriptionManager = eventBusSubscriptionManager ?? throw new ArgumentNullException(nameof(eventBusSubscriptionManager));
+            _lifetimeScope = lifetimeScope ?? throw new ArgumentNullException(nameof(lifetimeScope));
             _rabbitMqConfig = rabbitMqConfig?.CurrentValue ?? throw new ArgumentNullException(nameof(rabbitMqConfig));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
@@ -50,12 +53,12 @@ namespace RabbitMqTest3.EventBus
             }
         }
 
-        public void Subscribe<TEvent, TEventHandler>() 
-            where TEvent : IntegrationEventBase 
+        public void Subscribe<TEvent, TEventHandler>()
+            where TEvent : IntegrationEventBase
             where TEventHandler : IIntegrationEventHandler<TEvent>
         {
             EnsureConnected();
-            
+
             var subscriptionAdded = _eventBusSubscriptionManager.AddSubscription<TEvent, TEventHandler>();
             if (!subscriptionAdded)
             {
@@ -68,7 +71,7 @@ namespace RabbitMqTest3.EventBus
                 EnsureQueueDeclared(channel);
 
                 var eventName = typeof(TEvent).Name;
-                BindQueueToRoutingKey(channel, eventName);   
+                BindQueueToRoutingKey(channel, eventName);
             }
         }
 
@@ -100,9 +103,28 @@ namespace RabbitMqTest3.EventBus
 
         public bool IsConsuming { get; private set; }
 
-        private async Task ConsumerOnReceived(object sender, BasicDeliverEventArgs @event)
+        private async Task ConsumerOnReceived(object sender, BasicDeliverEventArgs consumedData)
         {
-            // Processing event
+            var eventName = consumedData.RoutingKey;
+            if (!_eventBusSubscriptionManager.HasSubscribedEvent(eventName))
+            {
+                _logger.LogWarning($"Event '{eventName}' cannot be processed because it is not subscribed");
+                return;
+            }
+
+            var eventType = _eventBusSubscriptionManager.GetEventType(eventName);
+            var eventBody = Encoding.UTF8.GetString(consumedData.Body.ToArray());
+            var @event = JsonConvert.DeserializeObject(eventBody, eventType);
+
+            using (var scope = _lifetimeScope.BeginLifetimeScope())
+            {
+                var handlerType = typeof(IIntegrationEventHandler<>).MakeGenericType(eventType);
+                var eventHandler = scope.Resolve(handlerType);
+
+                await (Task) handlerType.GetMethod("Handle")?.Invoke(eventHandler, new []{ @event });
+            }
+
+            _consumerChannel.BasicAck(consumedData.DeliveryTag, false);
         }
 
         private void EnsureConnected()
@@ -154,7 +176,7 @@ namespace RabbitMqTest3.EventBus
             {
                 return;
             }
-            
+
             DeclareExchange(channel);
             _exchangeDeclared = true;
         }
