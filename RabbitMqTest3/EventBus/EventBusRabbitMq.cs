@@ -16,8 +16,8 @@ namespace RabbitMqTest3.EventBus
     {
         private readonly IPersistentRabbitMqConnection _persistentRabbitMqConnection;
         private readonly IEventBusSubscriptionManager _eventBusSubscriptionManager;
+        private readonly IIntegrationEventProcessor _integrationEventProcessor;
         private readonly RabbitMqConfig _rabbitMqConfig;
-        private readonly ILifetimeScope _lifetimeScope;
         private readonly ILogger<EventBusRabbitMq> _logger;
 
         private IModel _consumerChannel;
@@ -26,11 +26,11 @@ namespace RabbitMqTest3.EventBus
         private bool _queueDeclared;
 
         public EventBusRabbitMq(IPersistentRabbitMqConnection persistentRabbitMqConnection, IEventBusSubscriptionManager eventBusSubscriptionManager,
-            IOptionsMonitor<RabbitMqConfig> rabbitMqConfig, ILifetimeScope lifetimeScope, ILogger<EventBusRabbitMq> logger)
+            IOptionsMonitor<RabbitMqConfig> rabbitMqConfig, IIntegrationEventProcessor integrationEventProcessor, ILogger<EventBusRabbitMq> logger)
         {
             _persistentRabbitMqConnection = persistentRabbitMqConnection ?? throw new ArgumentNullException(nameof(persistentRabbitMqConnection));
             _eventBusSubscriptionManager = eventBusSubscriptionManager ?? throw new ArgumentNullException(nameof(eventBusSubscriptionManager));
-            _lifetimeScope = lifetimeScope ?? throw new ArgumentNullException(nameof(lifetimeScope));
+            _integrationEventProcessor = integrationEventProcessor ?? throw new ArgumentNullException(nameof(integrationEventProcessor));
             _rabbitMqConfig = rabbitMqConfig?.CurrentValue ?? throw new ArgumentNullException(nameof(rabbitMqConfig));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
@@ -105,26 +105,11 @@ namespace RabbitMqTest3.EventBus
 
         private async Task ConsumerOnReceived(object sender, BasicDeliverEventArgs consumedData)
         {
-            var eventName = consumedData.RoutingKey;
-            if (!_eventBusSubscriptionManager.HasSubscribedEvent(eventName))
+            var messageProcessed = await _integrationEventProcessor.Process(consumedData);
+            if (messageProcessed)
             {
-                _logger.LogWarning($"Event '{eventName}' cannot be processed because it is not subscribed");
-                return;
+                _consumerChannel.BasicAck(consumedData.DeliveryTag, false);
             }
-
-            var eventType = _eventBusSubscriptionManager.GetEventType(eventName);
-            var eventBody = Encoding.UTF8.GetString(consumedData.Body.ToArray());
-            var @event = JsonConvert.DeserializeObject(eventBody, eventType);
-
-            using (var scope = _lifetimeScope.BeginLifetimeScope())
-            {
-                var handlerType = typeof(IIntegrationEventHandler<>).MakeGenericType(eventType);
-                var eventHandler = scope.Resolve(handlerType);
-
-                await (Task) handlerType.GetMethod("Handle")?.Invoke(eventHandler, new []{ @event });
-            }
-
-            _consumerChannel.BasicAck(consumedData.DeliveryTag, false);
         }
 
         private void EnsureConnected()

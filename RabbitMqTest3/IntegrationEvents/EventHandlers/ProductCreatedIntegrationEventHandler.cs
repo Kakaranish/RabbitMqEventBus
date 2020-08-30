@@ -1,4 +1,5 @@
-﻿using RabbitMqTest3.IntegrationEvents.EventTypes;
+﻿using Microsoft.Extensions.Logging;
+using RabbitMqTest3.IntegrationEvents.EventTypes;
 using System;
 using System.Threading.Tasks;
 
@@ -6,9 +7,16 @@ namespace RabbitMqTest3.IntegrationEvents.EventHandlers
 {
     public class ProductCreatedIntegrationEventHandler : IIntegrationEventHandler<ProductCreatedIntegrationEvent>
     {
-        public Task Handle(ProductCreatedIntegrationEvent @event)
+        private readonly ILogger<ProductCreatedIntegrationEventHandler> _logger;
+
+        public ProductCreatedIntegrationEventHandler(ILogger<ProductCreatedIntegrationEventHandler> logger)
         {
-            throw new NotImplementedException();
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
+        public async Task Handle(ProductCreatedIntegrationEvent @event)
+        {
+            _logger.LogInformation($"Handling '{@event.GetType().Name}' event for product {@event.Name}");
         }
     }
 }
