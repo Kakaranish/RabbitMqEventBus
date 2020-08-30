@@ -88,11 +88,6 @@ namespace RabbitMqTest3.EventBus
             EnsureExchangeDeclared(_consumerChannel);
             EnsureQueueDeclared(_consumerChannel);
 
-            if (_consumerChannel == null)
-            {
-                InitializeConsumerChannel();
-            }
-
             var consumer = new AsyncEventingBasicConsumer(_consumerChannel);
             consumer.Received += ConsumerOnReceived;
 
